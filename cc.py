@@ -48,8 +48,8 @@ hsyncs = []
 line = None
 for i, s in enumerate(syncs()):
     t, dur = s
-    if t > 4e6: # just process beginning to start
-        break
+    #if t > 4e6: # just process beginning to start
+    #    break
 
     if within(dur / 4.7, .025):
         type = 'h'
@@ -107,6 +107,7 @@ for i, val in enumerate(samples()):
         buf.append(val)
             
     if i > sync_end:
+        """
         fig, ax = plt.subplots()
         ax.plot(xrange(len(buf)), buf)
         ax.set(xlabel='time (s)', ylabel='voltage (mV)',
@@ -114,6 +115,16 @@ for i, val in enumerate(samples()):
         ax.grid()
         print hsyncs[sync_ix][1]
         plt.show()
+        """
+
+        bits = [1 if v > blank_level+25*ire else 0 for v in [buf[int(169+27.833*(7+i-.3))] for i in xrange(19)]]
+        if bits[:3] != [0,0,1] or sum(bits[3:11]) % 2 != 1 or sum(bits[11:19]) % 2 != 1:
+            print 'checksum fail', bits
+
+        for offset in (3, 11):
+            val = reduce(lambda a,b: 2*a+b, reversed(bits[offset:offset+7]))
+            if val != 0:
+                print chr(val), '0x%02x' % val, (('0'*7)+bin(val)[2:])[-8:], hsyncs[sync_ix][1]
         
         buf = []
 
