@@ -4,18 +4,20 @@ import matplotlib.pyplot as plt
 import numpy as np
 import math
 
-#samp_rate = 10.5
-samp_rate = 14.
+samp_rate = 10.5
+#samp_rate = 14.
 
 #sync_level = -920
 #blank_level = -690
 #sync_level = -3880
 #blank_level = -2915
-sync_level = -1670
-blank_level = -1265
+#sync_level = -1670
+#blank_level = -1265
+sync_level = -7625
+blank_level = -5735
 
 def samples():
-    with open('/tmp/cvbs.i16') as f:
+    with open('fw.i16') as f:
         while True:
             buf = f.read(2)
             if not buf:
@@ -49,8 +51,8 @@ hsyncs = []
 line = None
 for i, s in enumerate(syncs()):
     t, dur = s
-    if t > 4e6: # just process beginning to start
-        break
+    #if t > 2.5e6: # just process beginning to start
+    #    break
 
     if within(dur / 4.7, .025):
         type = 'h'
@@ -93,23 +95,65 @@ white_level = _ire(100)
 
 hsyncs = [hs for hs in hsyncs if hs[1] in (20, 263+20)]
 
-data_stream = (('\x00'*2)*30)+'\x14\x20\x14\x2e\x10\x50Thanks for watching!\x14\x2f'
+STREAM =    '\x14\x29'
+CLEAR_BUF = '\x14\x2e'
+START_BUF = '\x14\x20'
+DISP_BUF =  '\x14\x2f'
+FLASH =     '\x14\x28'
+
+ROW_11 = 0x1040
+ROW_12 = 0x1340
+ROW_13 = 0x1360
+ROW_14 = 0x1440
+ROW_15 = 0x1460
+ROW = ROW_13
+STYLE_DEF =   struct.pack('>H', ROW | 0x0)
+STYLE_GREEN = struct.pack('>H', ROW | 0x2)
+STYLE_BLUE =  struct.pack('>H', ROW | 0x4)
+STYLE_CYAN =  struct.pack('>H', ROW | 0x6)
+STYLE_RED =   struct.pack('>H', ROW | 0x8)
+STYLE_YEL =   struct.pack('>H', ROW | 0xa)
+STYLE_MAG =   struct.pack('>H', ROW | 0xc)
+
+BOX = '\x7f'
+MUSIC_NOTE = '\x11\x37'
+
+first = BOX
+line = first + MUSIC_NOTE + ' Thanks for watching! ' + MUSIC_NOTE + BOX
+data_stream = {
+    4: (STREAM + CLEAR_BUF + STYLE_DEF + line),
+    8: (''
+        + STYLE_RED + first
+        + STYLE_YEL + first
+        + STYLE_GREEN + first
+        + STYLE_CYAN + first
+        + STYLE_BLUE + first
+        + STYLE_MAG + first
+    ) * 15 + STYLE_DEF + first,
+}
 
 sync_ix = 0
 def calc_sync():
-    global data_stream
-    
     sync_us = hsyncs[sync_ix][0]
     line = hsyncs[sync_ix][1]
     field = 1 if line < 262 else 2
 
-    if field == 1:
-        # TODO don't split control chars
-        data = (data_stream + '\x00\x00')[:2]
-        data_stream = data_stream[2:]
-    else:
-        data = '\x00\x00'
-
+    data = ''
+    if field == 1 and data_stream:
+        curstrt = min(data_stream.keys())
+        if curstrt < sync_us/1e6:
+            s = data_stream[curstrt]
+            data = s[:2]
+            if len(data) == 2 and ord(data[0]) >= 32 and ord(data[1]) < 32:
+                # 2nd char is control char; don't split
+                data = data[0]
+            s = s[len(data):]
+            if s:
+                data_stream[curstrt] = s
+            else:
+                del data_stream[curstrt]
+    data = (data + '\x00\x00')[:2]
+            
     def byte_to_bits(b):
         bits = map(int, list(reversed(('0'*7)+bin(ord(b))[2:]))[:7])
         return bits + [(sum(bits)+1) % 2]
