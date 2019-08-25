@@ -173,6 +173,8 @@ out = open('/tmp/out.i16', 'w')
 cc_level = _ire(50)
 
 
+bitmap = open('/tmp/bitmap.u8', 'w')
+
 for i, val in enumerate(samples()):
     if i < lockout:
         continue
@@ -200,9 +202,16 @@ for i, val in enumerate(samples()):
         plt.show()
         """
 
-        print len(buf)
+        for c in xrange(640):
+            val = buf[int((c+.5)/640.*len(buf))]
+            val = (float(val) - sync_level) / (blank_level - sync_level) / (140 / 40.)
+            val = max(min(val, 1. - 1e-3), 0.)
+            val = chr(int(256.*val))
+            bitmap.write(val)
+            bitmap.write(val)
+            bitmap.write(val)
         
-        if hsyncs[sync_ix][1] in (20, 262+20)]: # 262 or 263?
+        if hsyncs[sync_ix][1] in (20, 262+20): # 262 or 263?
             #bitaddr = lambda i: (37+27.833*(7+i-.3)) / 14. * samp_rate
             bitaddr = lambda i: (14.888+1.986*i)*samp_rate
             bits = [1 if v > blank_level+25*ire else 0 for v in [buf[int(bitaddr(i))] for i in xrange(19)]]
