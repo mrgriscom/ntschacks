@@ -53,7 +53,7 @@ hsyncs = []
 line = None
 for i, s in enumerate(syncs()):
     t, dur = s
-    if t > 2.5e6: # just process beginning to start
+    if t > 0.5e6: # just process beginning to start
         break
 
     if within(dur / 4.7, .15):
@@ -91,6 +91,8 @@ for i, s in enumerate(syncs()):
         
 front_porch = 1.5
 back_porch = 9.4  # includes sync pulse
+cburst_start = 4.7 + 0.6
+cburst_len = 2.5
 
 ire = (blank_level - sync_level) / 40.
 def _ire(x):
@@ -164,7 +166,9 @@ def calc_sync():
     bits = [0,0,1] + byte_to_bits(data[0]) + byte_to_bits(data[1])
     #print data, bits
 
-    return (sync_us + back_porch) * samp_rate, (sync_us + 63.555 - front_porch) * samp_rate, bits
+    #return (sync_us + back_porch) * samp_rate, (sync_us + 63.555 - front_porch) * samp_rate, bits
+    return (sync_us - front_porch) * samp_rate, (sync_us - front_porch + 63.555) * samp_rate, bits
+
 sync_start, sync_end, cc_data = calc_sync()
 buf = []
 
@@ -174,6 +178,10 @@ cc_level = _ire(50)
 
 
 bitmap = open('/tmp/bitmap.u8', 'w')
+
+cburst_freq = 315e6/88
+Iref = [math.sin(2*math.pi*cburst_freq*i/(samp_rate*1e6)) for i in xrange(int(63.555*samp_rate*1.05))]
+Qref = [math.cos(2*math.pi*cburst_freq*i/(samp_rate*1e6)) for i in xrange(int(63.555*samp_rate*1.05))]
 
 for i, val in enumerate(samples()):
     if i < lockout:
@@ -192,24 +200,67 @@ for i, val in enumerate(samples()):
     #out.write(struct.pack('<H', int(round(-val))))
  
     if i > sync_end:
-        """
-        fig, ax = plt.subplots()
-        ax.plot([i/samp_rate for i in xrange(len(buf))], buf)
-        ax.set(xlabel='time (s)', ylabel='voltage (mV)',
-            title='About as simple as it gets, folks')
-        ax.grid()
-        print hsyncs[sync_ix][1]
-        plt.show()
-        """
+        cburst_rng = (int((cburst_start+front_porch)*samp_rate), int((cburst_start+front_porch+cburst_len)*samp_rate))
 
-        for c in xrange(640):
-            val = buf[int((c+.5)/640.*len(buf))]
-            val = (float(val) - sync_level) / (blank_level - sync_level) / (140 / 40.)
-            val = max(min(val, 1. - 1e-3), 0.)
-            val = chr(int(256.*val))
-            bitmap.write(val)
-            bitmap.write(val)
-            bitmap.write(val)
+        #fig, ax = plt.subplots()
+
+        import numpy
+        def bandpass(buf, passfunc):
+            ifft = numpy.fft.rfft(buf)
+            ifft = [n if passfunc(float(i)/len(ifft)*(1e6*samp_rate/2)) else 0 for i, n in enumerate(ifft)]
+            return numpy.fft.irfft(ifft)
+        
+        chroma_bw = 1.5e6
+        chroma = bandpass(buf, lambda f: f >= cburst_freq - chroma_bw)
+        luma = [a-b for a, b in zip(buf,chroma)]
+        #ax.plot([i/samp_rate for i in xrange(len(chroma))], chroma)
+        #ax.plot([i/samp_rate for i in xrange(len(chroma))], luma)
+
+        isig = [2*Iref[k]*chroma[k] for k in xrange(len(chroma))]
+        qsig = [2*Qref[k]*chroma[k] for k in xrange(len(chroma))]
+        isig = bandpass(isig, lambda f: f < chroma_bw)
+        qsig = bandpass(qsig, lambda f: f < chroma_bw)
+        mag = [(a**2+b**2)**.5 for a, b in zip(isig, qsig)]
+        phase = [math.atan2(b, a) for a, b in zip(isig, qsig)]
+        cburst_phase = phase[cburst_rng[0]:cburst_rng[1]]
+        ref_phase = list(sorted(cburst_phase))[len(cburst_phase)/2]
+        isig = [m*math.cos(theta - ref_phase) for m, theta in zip(mag, phase)]
+        qsig = [m*math.sin(theta - ref_phase) for m, theta in zip(mag, phase)]
+
+        #ax.plot([i/samp_rate for i in xrange(len(chroma))], isig)
+        #ax.plot([i/samp_rate for i in xrange(len(chroma))], qsig)
+        #ax.plot([i/samp_rate for i in xrange(len(chroma))], mag)
+        #ax.plot([i/samp_rate for i in xrange(len(chroma))], phase)
+
+        #cb = chroma[cburst_rng[0]:cburst_rng[1]]
+        #cbph = phase[cburst_rng[0]:cburst_rng[1]]
+        #ax.plot([i/samp_rate for i in xrange(len(cb))], cb)
+        #ax.plot([i/samp_rate for i in xrange(len(cb))], cbph)
+        
+        #ax.grid()
+        #plt.show()
+        
+        width = int(round(480.*4/3*63.555/52.6))
+        for c in xrange(width):
+            ix = int((c+.5)/width*len(luma))
+            y = luma[ix]
+            #y = (float(y) - sync_level) / (blank_level - sync_level) / (140 / 40.)
+            
+            y = (float(y) - sync_level) / (blank_level - sync_level) * 40
+            y = abs((y - 47.5) / 92.5)
+            #print luma[ix], y
+
+            y = max(min(y, 1. - 1e-3), 0.)
+            cI = isig[ix] / (100. * ire)
+            cQ = qsig[ix] / (100. * ire)
+            #print 'yiq', y, cI, cQ
+            R = y + cI*0.956 + cQ*0.619
+            G = y + cI*-0.272 + cQ*-0.647
+            B = y + cI*-1.106 + cQ*1.703
+            #print 'rgb', R, G, B
+            bitmap.write(chr(max(min(int(256.*R),255),0)))
+            bitmap.write(chr(max(min(int(256.*G),255),0)))
+            bitmap.write(chr(max(min(int(256.*B),255),0)))
         
         if hsyncs[sync_ix][1] in (20, 262+20): # 262 or 263?
             #bitaddr = lambda i: (37+27.833*(7+i-.3)) / 14. * samp_rate
