@@ -53,7 +53,7 @@ hsyncs = []
 line = None
 for i, s in enumerate(syncs()):
     t, dur = s
-    if t > 0.5e6: # just process beginning to start
+    if t > .5e6: # just process beginning to start
         break
 
     if within(dur / 4.7, .15):
@@ -186,6 +186,15 @@ bitmap = np.zeros([525, width, 3])
 bmln = lambda i: ((i*2 if i < 263 else (i-263)*2+1) - 41) % 525
 frame = 0
 
+import time
+
+passfuncs = {
+    'chroma': lambda f: f >= cburst_freq - chroma_bw,
+    'luma': lambda f: f < cburst_freq - chroma_bw,
+    'qam': lambda f: f < chroma_bw,
+}
+passkernels = {}
+
 for i, val in enumerate(samples()):
     if i < lockout:
         continue
@@ -193,6 +202,8 @@ for i, val in enumerate(samples()):
     t = i/samp_rate
 
     if i > sync_start:
+        start = time.time()
+    
         #clock = (i - sync_start) / ((63.555 - front_porch - back_porch) * samp_rate) * 26
         #if clock < 7:
         #    val = .5*(blank_level+cc_level) + .5*(blank_level-cc_level)*math.cos(clock * 2*math.pi)
@@ -203,32 +214,46 @@ for i, val in enumerate(samples()):
     #out.write(struct.pack('<H', int(round(-val))))
  
     if i > sync_end:
+        #print 'a', '%.7f' % (time.time() - start)
+        
         cburst_rng = (int((cburst_start+front_porch)*samp_rate), int((cburst_start+front_porch+cburst_len)*samp_rate))
 
         #fig, ax = plt.subplots()
 
         buf = np.array(buf)
+        #print 'b', '%.7f' % (time.time() - start)
         
         import numpy
-        def bandpass(buf, passfunc):
-            ifft = numpy.fft.rfft(buf)
-            # TODO numpyify
-            ifft = [n if passfunc(float(i)/len(ifft)*(1e6*samp_rate/2)) else 0 for i, n in enumerate(ifft)]
-            return numpy.fft.irfft(ifft)
+        def bandpass(buf, passtype):
+            ifft = np.fft.rfft(buf)
+
+            key = (len(ifft), passtype)
+            if key not in passkernels:
+                passkernels[key] = np.array([1 if passfuncs[passtype](float(i)/len(ifft)*(1e6*samp_rate/2)) else 0 for i in xrange(len(ifft))])
+            kernel = passkernels[key]
+
+            return np.fft.irfft(ifft * kernel)
         
         chroma_bw = 0.8e6
-        chroma = bandpass(buf, lambda f: f >= cburst_freq - chroma_bw)
-        luma = bandpass(buf, lambda f: f < cburst_freq - chroma_bw)
+        chroma = bandpass(buf, 'chroma')
+        luma = bandpass(buf, 'luma')
         #ax.plot([i/samp_rate for i in xrange(len(chroma))], chroma)
         #ax.plot([i/samp_rate for i in xrange(len(chroma))], luma)
 
+        #print 'c', time.time() - start
+
+        
         isig = 2 * Iref[:len(chroma)] * chroma
         qsig = 2 * Qref[:len(chroma)] * chroma
-        isig = bandpass(isig, lambda f: f < chroma_bw)
-        qsig = bandpass(qsig, lambda f: f < chroma_bw)
+        #print 'd', time.time() - start
+        isig = bandpass(isig, 'qam')
+        qsig = bandpass(qsig, 'qam')
+        #print 'e', time.time() - start
         mag = (isig**2 + qsig**2)**.5
         phase = np.arctan2(qsig, isig)
+        #print 'f', time.time() - start
         ref_phase = np.median(phase[cburst_rng[0]:cburst_rng[1]])
+        #print 'g', time.time() - start
 
         #ax.plot([i/samp_rate for i in xrange(len(chroma))], isig)
         #ax.plot([i/samp_rate for i in xrange(len(chroma))], qsig)
@@ -248,16 +273,18 @@ for i, val in enumerate(samples()):
             if bmln(line) <= 1:
                 from PIL import Image
                 img = Image.fromarray(bitmap.astype('uint8'), 'RGB')
-                img.save('/tmp/frame%03d.png' % frame)
+                img.save('/tmp/frame%05d.png' % frame)
                 print 'wrote frame', frame
                 frame += 1
-            
-            # TODO xrange np
-            ix = ((np.array(xrange(width)) + .5) / width * len(luma)).astype(int)
-            # TODO numpyify
-            ay = np.array([luma[i] for i in ix]).astype(float)
-            am = np.array([mag[i] for i in ix])
-            ap = np.array([phase[i] for i in ix])
+                #print 'h', time.time() - start
+        
+                
+            ix = ((np.arange(width) + .5) / width * len(luma)).astype(int)
+            #print 'i', time.time() - start
+            ay = luma[ix]
+            am = mag[ix]
+            ap = phase[ix]
+            #print 'j', time.time() - start
             ay = (ay - sync_level) / (blank_level - sync_level) * 40
             ay = np.absolute((ay - 47.5) / 92.5)
             ay = np.clip(ay, 0., 1.)
@@ -271,13 +298,16 @@ for i, val in enumerate(samples()):
             R = ay + isig*0.956 + qsig*0.619
             G = ay + isig*-0.272 + qsig*-0.647
             B = ay + isig*-1.106 + qsig*1.703
+            #print 'k', time.time() - start
             tobyte = lambda arr: np.clip(arr, 0., 1. - 1e-6) * 256.  # epsilon needed to prevent wraparound
             rgb = np.swapaxes(np.array([tobyte(R), tobyte(G), tobyte(B)]), 0, 1)
+            #print 'l', time.time() - start
             bitmap[bmln(line)] = rgb
+            #print 'm', time.time() - start
         
         if line in (20, 262+20): # 262 or 263?
             #bitaddr = lambda i: (37+27.833*(7+i-.3)) / 14. * samp_rate
-            bitaddr = lambda i: (14.888+1.986*i)*samp_rate
+            bitaddr = lambda i: (10.9+14.888+1.986*i)*samp_rate
             bits = [1 if v > blank_level+25*ire else 0 for v in [buf[int(bitaddr(i))] for i in xrange(19)]]
             if not all(b == 0 for b in bits) and (bits[:3] != [0,0,1] or sum(bits[3:11]) % 2 != 1 or sum(bits[11:19]) % 2 != 1):
                 print 'checksum fail', bits
@@ -285,7 +315,7 @@ for i, val in enumerate(samples()):
             for offset in (3, 11):
                 val = reduce(lambda a,b: 2*a+b, reversed(bits[offset:offset+7]))
                 if val != 0:
-                    print chr(val), '0x%02x' % val, (('0'*7)+bin(val)[2:])[-8:], hsyncs[sync_ix][1]
+                    print chr(val), '0x%02x' % val, (('0'*7)+bin(val)[2:])[-8:], hsyncs[sync_ix]
 
         buf = []
 
