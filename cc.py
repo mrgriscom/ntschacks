@@ -3,6 +3,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import math
+from PIL import Image
 
 samp_rate = 10.5
 #samp_rate = 14.
@@ -19,7 +20,9 @@ sync_level = -9590
 blank_level = -7750
 
 def samples():
-    with open('gladiator.i16') as f:
+    #with open('rickandmorty/cvbs.i16') as f:
+    #with open('gladiator.i16') as f:
+    with open('/tmp/gdsync2.i16') as f:
         while True:
             buf = f.read(2)
             if not buf:
@@ -29,7 +32,8 @@ def samples():
 lockout = int(25 * samp_rate * 1000)
 def syncs():
     debounce = 10
-    sync_thresh = .5*(sync_level + blank_level)
+    # TODO need to low-pass filter sync pulse?
+    sync_thresh = -8475 #.5*(sync_level + blank_level)
     last_sync = 1e100 # set to infinity so no sync registered until we see an above-sync sample first
     for i, val in enumerate(samples()):
         if i < lockout:
@@ -53,9 +57,11 @@ hsyncs = []
 line = None
 for i, s in enumerate(syncs()):
     t, dur = s
-    if t > .5e6: # just process beginning to start
+    if t > 8e6: # just process beginning to start
         break
 
+    #print t, dur
+    
     if within(dur / 4.7, .15):
         type = 'h'
     elif within(dur / 2.35, .60):
@@ -76,14 +82,21 @@ for i, s in enumerate(syncs()):
     if within(elapsed / 63.555, .15):
         if line is not None:
             line += 1
-        if type == 'eq' and last_sync[1] == 'h':
-            # TODO verify expected line
-            line = 0
+        if type == 'eq':
+            # seems macrovision-tolerant? but better to sync against v-sync pulse?
+            if last_sync[1] == 'h':
+                if line is not None and line != 525:
+                    print 'premature sync'
+                line = 0
+            elif last_h[1] == 'h':
+                if line is not None and line != 263:
+                    print 'premature sync'
+                line = 263
         print t, line
         hsyncs.append((t, line))
         last_h = s
     elif elapsed > 63.555:
-        print 'sync lost'
+        print 'sync lost', elapsed, t, line
         last_h = s
         line = None
     # TODO verify expected even field start
@@ -185,6 +198,10 @@ width = int(round(480.*4/3*63.555/52.6))
 bitmap = np.zeros([525, width, 3])
 bmln = lambda i: ((i*2 if i < 263 else (i-263)*2+1) - 41) % 525
 frame = 0
+ccstream = open('/tmp/cc.out', 'w')
+import csv
+ccwriter = csv.DictWriter(ccstream, ['frame', 'channel', 'data'])
+ccwriter.writeheader()
 
 import time
 
@@ -194,6 +211,10 @@ passfuncs = {
     'qam': lambda f: f < chroma_bw,
 }
 passkernels = {}
+
+cctext = ''
+old_ref_phase = 0
+ref_phase = 0
 
 for i, val in enumerate(samples()):
     if i < lockout:
@@ -220,7 +241,10 @@ for i, val in enumerate(samples()):
 
         #fig, ax = plt.subplots()
 
-        buf = np.array(buf)
+        while len(buf) < 667:
+            buf.append(blank_level)
+        buf = np.array(buf)[:667]
+        assert len(buf) == 667
         #print 'b', '%.7f' % (time.time() - start)
         
         import numpy
@@ -234,7 +258,7 @@ for i, val in enumerate(samples()):
 
             return np.fft.irfft(ifft * kernel)
         
-        chroma_bw = 0.8e6
+        chroma_bw = 1.3e6
         chroma = bandpass(buf, 'chroma')
         luma = bandpass(buf, 'luma')
         #ax.plot([i/samp_rate for i in xrange(len(chroma))], chroma)
@@ -250,9 +274,18 @@ for i, val in enumerate(samples()):
         qsig = bandpass(qsig, 'qam')
         #print 'e', time.time() - start
         mag = (isig**2 + qsig**2)**.5
-        phase = np.arctan2(qsig, isig)
+        phase = np.arctan2(-qsig, isig)
+        #import pdb;pdb.set_trace()
+        phase_correction = -0.8 * (len(phase) - 63.55555*samp_rate) * cburst_freq/(samp_rate*1e6) * 2*math.pi
+        #print len(phase), phase_correction
+        phase = phase + (np.arange(len(phase)) / float(len(phase)) * phase_correction)
         #print 'f', time.time() - start
-        ref_phase = np.median(phase[cburst_rng[0]:cburst_rng[1]])
+        old_ref_phase = ref_phase
+        ref_phase = np.median(phase[cburst_rng[0]:cburst_rng[1]]) + math.radians(57) #-73)
+
+        #elapsed = hsyncs[sync_ix][0] - hsyncs[sync_ix-1][0]
+        #print elapsed, ref_phase % (2*math.pi), (old_ref_phase + elapsed*1e-6*cburst_freq*2*math.pi - ref_phase)%(2*math.pi)
+        
         #print 'g', time.time() - start
 
         #ax.plot([i/samp_rate for i in xrange(len(chroma))], isig)
@@ -270,8 +303,8 @@ for i, val in enumerate(samples()):
 
         line = hsyncs[sync_ix][1]
         if line is not None:
+            #print line, hsyncs[sync_ix][0] - hsyncs[sync_ix-1][0], ref_phase
             if bmln(line) <= 1:
-                from PIL import Image
                 img = Image.fromarray(bitmap.astype('uint8'), 'RGB')
                 img.save('/tmp/frame%05d.png' % frame)
                 print 'wrote frame', frame
@@ -304,18 +337,34 @@ for i, val in enumerate(samples()):
             #print 'l', time.time() - start
             bitmap[bmln(line)] = rgb
             #print 'm', time.time() - start
-        
+
+            #bitmap[bmln(line)][640] = {
+            #    666: [255, 0, 0],
+            #    667: [0, 255, 0],
+            #    668: [0, 0, 255],
+            #}.get(len(buf), [0, 0, 0])
+            
         if line in (20, 262+20): # 262 or 263?
-            #bitaddr = lambda i: (37+27.833*(7+i-.3)) / 14. * samp_rate
             bitaddr = lambda i: (10.9+14.888+1.986*i)*samp_rate
             bits = [1 if v > blank_level+25*ire else 0 for v in [buf[int(bitaddr(i))] for i in xrange(19)]]
             if not all(b == 0 for b in bits) and (bits[:3] != [0,0,1] or sum(bits[3:11]) % 2 != 1 or sum(bits[11:19]) % 2 != 1):
                 print 'checksum fail', bits
-
+                bits = [0]*19
+                
+            ccchars = []
             for offset in (3, 11):
                 val = reduce(lambda a,b: 2*a+b, reversed(bits[offset:offset+7]))
                 if val != 0:
                     print chr(val), '0x%02x' % val, (('0'*7)+bin(val)[2:])[-8:], hsyncs[sync_ix]
+                    ccchars.append(val)
+            if ccchars:
+                if 32 <= ccchars[0] <= 127:
+                    ccdata = ''.join(map(chr, ccchars))
+                else:
+                    ccdata = unichr(ccchars[0]*256 + ccchars[1])
+                ccwriter.writerow({'frame': frame, 'channel': 1 if line < 262 else 2, 'data': ccdata.encode('utf8')})
+                ccstream.flush()
+                    
 
         buf = []
 
