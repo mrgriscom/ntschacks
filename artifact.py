@@ -8,6 +8,7 @@ from PIL import ImageFont
 from PIL import ImageDraw
 import bisect
 import time
+from datetime import datetime, timedelta
 
 samp_rate = 640/52.6
 
@@ -88,21 +89,25 @@ def cbar_row(row):
     return [np.array([compose(yiq, ph_o, i) for i, yiq in enumerate(yiq_per_px)]) for ph_o in (0, .5)]
 cbar_rows = [cbar_row(r[1]) for r in rows]
 
-fps = 20
+fps = 60
 _ovltxt = None
 _ovl = None
+t0 = datetime(2019,8,15,3,24,06)
 def mkoverlay(fnum):
     global _ovltxt
     global _ovl
     
-    txt = ' 1996-08-29\nThu 03:51:%02d' % (6 + fnum/float(fps))
+    txt = (t0 + timedelta(seconds=fnum/float(fps))).strftime(' %Y-%m-%d\n%a %H:%M:%S')
+    #txt = ' 1995-08-17\nThu 03:24:%02d' % (6 + fnum/float(fps))
     if txt != _ovltxt:
         overlay = Image.new('LA', (width, height))
         draw = ImageDraw.Draw(overlay)
-        font = ImageFont.truetype("/usr/share/fonts/truetype/ubuntu/UbuntuMono-R.ttf", 24)
+        #font = ImageFont.truetype("/home/drew/Downloads/VCR_OSD_MONO_1.001.ttf", 28)
+        font = ImageFont.truetype("/usr/share/fonts/truetype/ubuntu/UbuntuMono-R.ttf", 30)
         tw = max(font.getsize(s)[0] for s in txt.split('\n'))
         x = (width-tw)/2
-        y = rows[0][0]*height - 52
+        y = rows[0][0]*height - 80
+        #draw.rectangle(((320-tw/2-10, 320-65), (320+tw/2+10, 320-5)), fill="black")
         for xo in (1, -1):
             for yo in (1, -1):
                 draw.text((x+xo, y+yo), txt, (0,), font=font)
@@ -132,20 +137,21 @@ def bandpass(buf, passtype):
 
     return np.fft.irfft(ifft * kernel)
 
-num_frames = fps*5
+num_frames = fps*7
 for fnum in xrange(num_frames):
-    for ln in xrange(height):
-        phase_mode = (fnum + ln)%2
+    for ln in xrange(height/2):
+        bmln = 2*ln + (fnum)%2
+        phase_mode = ((fnum+1)/2 + ln)%2
         ref_phase = phase_mode * math.pi
-
+        
         #buf = [.8 if (i/100)%2 == 0 else .2 for i in xrange(667)]
         #buf = [.5 + .3*math.sin(  i/(samp_rate*1e6)*cburst_freq*2*math.pi  ) for i in xrange(667)]
         #buf = [(.8 if (i/100)%2 == 0 else .2) + .3*math.sin(  (i/(samp_rate*1e6)*cburst_freq + (0 if (i/100)%2==0 else .5) )*2*math.pi + ref_phase ) for i in xrange(width)]
-        buf = np.array(cbar_rows[bisect.bisect_right(cbar_row_heights, ln)][phase_mode])
+        buf = np.array(cbar_rows[bisect.bisect_right(cbar_row_heights, bmln)][phase_mode])
 
         ovl = mkoverlay(fnum)
-        alpha = ovl[ln][1] / 255.
-        ovlum = ovl[ln][0] / 255.
+        alpha = ovl[bmln][1] / 255.
+        ovlum = ovl[bmln][0] / 255.
         buf = (1.-alpha)*buf + alpha*ovlum
         
         #for i in xrange(len(buf)):
@@ -196,7 +202,7 @@ for fnum in xrange(num_frames):
         tobyte = lambda arr: np.clip(arr, 0., 1. - 1e-6) * 256.  # epsilon needed to prevent wraparound
         rgb = np.swapaxes(np.array([tobyte(R), tobyte(G), tobyte(B)]), 0, 1)
         #print 'l', time.time() - start
-        bitmap[ln] = rgb
+        bitmap[bmln] = rgb
         #print 'm', time.time() - start
 
     img = Image.fromarray(bitmap.astype('uint8'), 'RGB')
