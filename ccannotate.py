@@ -13,12 +13,13 @@ hexheight = hexfont.getsize('A')[1]
 hexfont = ImageFont.truetype("/home/drew/Downloads/UnicodeBMPFallback.ttf", int(float(TXTSZ) * txth/hexheight))
 
 X0 = 10
-Y0 = 30
+Y0 = 25
 LINESEP = 1.05
 BOTTOM_MARGIN = int(.75*txth)    
 
-FRAMES = '/tmp/frame*.png'
-CCDATA = '/tmp/cc.out'
+FRAMES = '/home/drew/nobk/ntsc/frame*.png'
+CCDATA = '/home/drew/nobk/ntsc/cc.out'
+OUT =    '/home/drew/nobk/ntsc/annot/framecc%05d.png'
 CCLINES = 5
 
 def frame_num(path):
@@ -71,7 +72,7 @@ for path in sorted(glob.glob(FRAMES)):
         draw.text((x, y + yo), c, color, font=font)
         x += font.getsize(c)[0]
         
-    out.save('/tmp/annot/framecc%05d.png' % n)
+    out.save(OUT % n)
     print n
 
 
