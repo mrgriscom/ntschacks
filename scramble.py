@@ -3,6 +3,10 @@ import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 
+"""
+Corrupt CVBS signal with old-school sync suppression scrambling
+"""
+
 # sample rate of input signal in Ms/sec
 #samp_rate = 10.5
 samp_rate = 14.

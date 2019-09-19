@@ -5,6 +5,11 @@ import numpy as np
 import math
 from PIL import Image
 
+"""
+Decode CVBS signal into sequential video frames, with color, and closed captioning stream
+Also some code to inject custom closed captions, but in a non-working state
+"""
+
 # sample rate of input signal in Ms/sec
 samp_rate = 10.5
 #samp_rate = 14.
