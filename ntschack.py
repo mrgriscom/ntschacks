@@ -5,9 +5,17 @@ import numpy as np
 import math
 from PIL import Image
 
+# sample rate of input signal in Ms/sec
 samp_rate = 10.5
 #samp_rate = 14.
 
+# only process this many samples (for quicker testing)
+max_time = 4e6
+# process full input signal
+#max_time = None
+
+# numeric values of blank and sync level (varies based on gain used to record signal)
+# TODO: determine these automatically
 #sync_level = -920
 #blank_level = -690
 #sync_level = -3880
@@ -16,24 +24,27 @@ samp_rate = 10.5
 #blank_level = -1265
 #sync_level = -7625
 #blank_level = -5735
-sync_level = -9590
-blank_level = -7750
+#sync_level = -9590
+#blank_level = -7750
+sync_level = -9230
+blank_level = -7470
 
 def samples():
-    #with open('rickandmorty/cvbs.i16') as f:
-    #with open('gladiator.i16') as f:
-    with open('/tmp/gdsync2.i16') as f:
+    #with open('cvbs.i16') as f:
+    with open('/tmp/cvbs.i16') as f:
+    #with open('/tmp/gdsync2.i16') as f:
         while True:
             buf = f.read(2)
             if not buf:
                 return
             yield -struct.unpack('<H', buf)[0]
 
-lockout = int(25 * samp_rate * 1000)
+# ignore first N ms of signal to give it time to stabilize
+lockout = int(25 * (samp_rate * 1000))
 def syncs():
     debounce = 10
-    # TODO need to low-pass filter sync pulse?
-    sync_thresh = -8475 #.5*(sync_level + blank_level)
+    # TODO need to low-pass filter sync pulse? rarely, high frequency ringing screws up detection
+    sync_thresh = .5*(sync_level + blank_level)
     last_sync = 1e100 # set to infinity so no sync registered until we see an above-sync sample first
     for i, val in enumerate(samples()):
         if i < lockout:
@@ -57,7 +68,7 @@ hsyncs = []
 line = None
 for i, s in enumerate(syncs()):
     t, dur = s
-    if t > 8e6: # just process beginning to start
+    if max_time is not None and t > max_time:
         break
 
     #print t, dur
@@ -102,6 +113,7 @@ for i, s in enumerate(syncs()):
     # TODO verify expected even field start
     last_sync = s
         
+# length of various signal segments in ms
 front_porch = 1.5
 back_porch = 9.4  # includes sync pulse
 cburst_start = 4.7 + 0.6
@@ -112,7 +124,11 @@ def _ire(x):
     return blank_level + x*ire
 white_level = _ire(100)
 
+# filter to just CC lines for quicker eia-608 extraction
 #hsyncs = [hs for hs in hsyncs if hs[1] in (20, 262+20)] # 262 or 263?
+
+#### code for injecting custom closed caption stream ####
+## note: i think this capability is broken w/o some additional work to get it back
 
 STREAM =    '\x14\x29'
 CLEAR_BUF = '\x14\x2e'
@@ -139,6 +155,7 @@ MUSIC_NOTE = '\x11\x37'
 
 first = BOX
 line = first + MUSIC_NOTE + ' Thanks for watching! ' + MUSIC_NOTE + BOX
+# {k: v} -- at timestamp k seconds, stream string v
 data_stream = {
     4: (STREAM + CLEAR_BUF + STYLE_DEF + line),
     8: (''
@@ -157,6 +174,7 @@ def calc_sync():
     line = hsyncs[sync_ix][1]
     field = 1 if line < 262 else 2
 
+    # get next CC stream bytes to inject
     data = ''
     if field == 1 and data_stream:
         curstrt = min(data_stream.keys())
@@ -224,7 +242,8 @@ for i, val in enumerate(samples()):
 
     if i > sync_start:
         start = time.time()
-    
+
+        # inject CC stream -- note this uses hard-coded timing constants which have since changed
         #clock = (i - sync_start) / ((63.555 - front_porch - back_porch) * samp_rate) * 26
         #if clock < 7:
         #    val = .5*(blank_level+cc_level) + .5*(blank_level-cc_level)*math.cos(clock * 2*math.pi)
@@ -241,6 +260,8 @@ for i, val in enumerate(samples()):
 
         #fig, ax = plt.subplots()
 
+        # force all lines to same length, or else color decoding gets weird phase-drift
+        # TODO solve this more elegantly
         while len(buf) < 667:
             buf.append(blank_level)
         buf = np.array(buf)[:667]
@@ -276,6 +297,7 @@ for i, val in enumerate(samples()):
         mag = (isig**2 + qsig**2)**.5
         phase = np.arctan2(-qsig, isig)
         #import pdb;pdb.set_trace()
+        # artifact of line buffer being integer # of samples?
         phase_correction = -0.8 * (len(phase) - 63.55555*samp_rate) * cburst_freq/(samp_rate*1e6) * 2*math.pi
         #print len(phase), phase_correction
         phase = phase + (np.arange(len(phase)) / float(len(phase)) * phase_correction)
@@ -343,7 +365,8 @@ for i, val in enumerate(samples()):
             #    667: [0, 255, 0],
             #    668: [0, 0, 255],
             #}.get(len(buf), [0, 0, 0])
-            
+
+        # extract CC data
         if line in (20, 262+20): # 262 or 263?
             bitaddr = lambda i: (10.9+14.888+1.986*i)*samp_rate
             bits = [1 if v > blank_level+25*ire else 0 for v in [buf[int(bitaddr(i))] for i in xrange(19)]]

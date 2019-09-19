@@ -3,9 +3,17 @@ import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 
+# sample rate of input signal in Ms/sec
 #samp_rate = 10.5
 samp_rate = 14.
 
+# only process this many samples (for quicker testing)
+max_samples = 4e6
+# process full input signal
+#max_samples = None
+
+# numeric values of blank and sync level (varies based on gain used to record signal)
+# TODO: determine these automatically
 #sync_level = -920
 #blank_level = -690
 #sync_level = -3880
@@ -14,6 +22,7 @@ sync_level = -1670
 blank_level = -1250
 
 def samples():
+    # input signal, encoded as little-endian 16-bit ints
     with open('/tmp/cvbs.i16') as f:
         while True:
             buf = f.read(2)
@@ -45,8 +54,8 @@ def within(pct, epsilon=.005):
 last_h = None
 hsyncs = []
 for i, s in enumerate(syncs()):
-    #if s > 4e6: # just process beginning to start
-    #    break
+    if max_samples is not None and s > max_samples:
+        break
 
     if not last_h:
         last_h = s
@@ -60,8 +69,10 @@ for i, s in enumerate(syncs()):
         print 'sync lost'
         last_h = s
 
+# length of porches in ms
 front_porch = 1.5
 back_porch = 9.4  # includes sync pulse
+# additional padding of the sync suppress to either side of the HBI
 padding = .005*63.555
 #padding = .015*63.555
 
@@ -76,9 +87,12 @@ sync_start, sync_end = calc_sync()
 x = []
 y = []
 
+# standard gated sync suppression scrambling
 out1 = open('cvbs-scram.i16', 'w')
+# sync suppression with inversion (not sure how accurate this is as it erases the VBI unrecoverably)
 out2 = open('cvbs-scram-inv.i16', 'w')
 
+# used to turn scrambling on and off cyclically for comparison: [off_secs, on_secs]
 #duty_cycle = [2, 2]
 duty_cycle = [0, 2]
 def scramble(t):
@@ -109,14 +123,3 @@ for i, val in enumerate(samples()):
             break
         sync_start, sync_end = calc_sync()
 
-"""
-fig, ax = plt.subplots()
-ax.plot(x, y)
-
-ax.set(xlabel='time (s)', ylabel='voltage (mV)',
-       title='About as simple as it gets, folks')
-ax.grid()
-
-fig.savefig("test.png")
-plt.show()
-"""

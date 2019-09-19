@@ -3,8 +3,16 @@ import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 
-#samp_rate = 10.5
-samp_rate = 14.
+"""
+Plot (an excerpt of) the CVBS signal for debugging purposes and to set the sync/blank levels in other scripts
+"""
+
+# sample rate of input signal in Ms/sec
+samp_rate = 10.5
+#samp_rate = 14.
+
+# only plot this many samples
+max_samples = 20e6
 
 def samples():
     with open('/tmp/cvbs.i16') as f:
@@ -18,7 +26,7 @@ x = []
 y = []
 
 for i, val in enumerate(samples()):
-    if i > 20e6:
+    if i > max_samples:
         break
     
     t = i/samp_rate

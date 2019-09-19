@@ -10,7 +10,15 @@ import bisect
 import time
 from datetime import datetime, timedelta
 
+"""
+Perform analog decoding of a series of frames (e.g., color bars) to illustrate
+analog artifacts, but don't go so far as to re-create full CVBS signal with
+blanking intervals, etc.
+"""
+
 samp_rate = 640/52.6
+
+PRISTINE = False
 
 colors = {
     'grey':    (77,   0, 0),
@@ -77,16 +85,21 @@ def cbar_row(row):
     col_per_px = [bisect.bisect_right(col_widths, i) for i in xrange(width)]
     yiq_per_px = [colors[row[col][1]] for col in col_per_px]
 
-    def compose(yiq, phase_offset, i):
+    def norm(yiq):
         y, ph, sat = yiq
         y = (y - 7.5) / (100. - 7.5)
         ph = math.radians(ph - 123)
         sat = sat / 100.
-
-        t = i / (samp_rate*1e6) #(float(i) / width) * 52.6e-6
+        return (y, ph, sat)
         
+    def compose(yiq, phase_offset, i):
+        y, ph, sat = norm(yiq)
+        t = i / (samp_rate*1e6) #(float(i) / width) * 52.6e-6x
         return y + sat * math.sin((t * cburst_freq + phase_offset) * 2*math.pi + ph)
-    return [np.array([compose(yiq, ph_o, i) for i, yiq in enumerate(yiq_per_px)]) for ph_o in (0, .5)]
+    if not PRISTINE:
+        return [np.array([compose(yiq, ph_o, i) for i, yiq in enumerate(yiq_per_px)]) for ph_o in (0, .5)]
+    else:
+        return np.array([(y, -ph, sat) for y, ph, sat in map(norm, yiq_per_px)]).swapaxes(0, 1)
 cbar_rows = [cbar_row(r[1]) for r in rows]
 
 fps = 60
@@ -143,33 +156,45 @@ for fnum in xrange(num_frames):
         bmln = 2*ln + (fnum)%2
         phase_mode = ((fnum+1)/2 + ln)%2
         ref_phase = phase_mode * math.pi
-        
-        #buf = [.8 if (i/100)%2 == 0 else .2 for i in xrange(667)]
-        #buf = [.5 + .3*math.sin(  i/(samp_rate*1e6)*cburst_freq*2*math.pi  ) for i in xrange(667)]
-        #buf = [(.8 if (i/100)%2 == 0 else .2) + .3*math.sin(  (i/(samp_rate*1e6)*cburst_freq + (0 if (i/100)%2==0 else .5) )*2*math.pi + ref_phase ) for i in xrange(width)]
-        buf = np.array(cbar_rows[bisect.bisect_right(cbar_row_heights, bmln)][phase_mode])
 
-        ovl = mkoverlay(fnum)
-        alpha = ovl[bmln][1] / 255.
-        ovlum = ovl[bmln][0] / 255.
-        buf = (1.-alpha)*buf + alpha*ovlum
-        
-        #for i in xrange(len(buf)):
-        #    alpha = ovl[ln][i][1] / 255.
-        #    lum = ovl[ln][i][0] / 255.
-        #    buf[i] = (1.-alpha)*buf[i] + alpha*lum
+        if not PRISTINE:
+            #buf = [.8 if (i/100)%2 == 0 else .2 for i in xrange(667)]
+            #buf = [.5 + .3*math.sin(  i/(samp_rate*1e6)*cburst_freq*2*math.pi  ) for i in xrange(667)]
+            #buf = [(.8 if (i/100)%2 == 0 else .2) + .3*math.sin(  (i/(samp_rate*1e6)*cburst_freq + (0 if (i/100)%2==0 else .5) )*2*math.pi + ref_phase ) for i in xrange(width)]
+            buf = np.array(cbar_rows[bisect.bisect_right(cbar_row_heights, bmln)][phase_mode])
 
-        chroma_bw = 1.1e6
-        chroma = bandpass(buf, 'chroma')
-        luma = bandpass(buf, 'luma')
+            ovl = mkoverlay(fnum)
+            alpha = ovl[bmln][1] / 255.
+            ovlum = ovl[bmln][0] / 255.
+            buf = (1.-alpha)*buf + alpha*ovlum
         
-        isig = 2 * Iref[:len(chroma)] * chroma
-        qsig = 2 * Qref[:len(chroma)] * chroma
-        isig = bandpass(isig, 'qam')
-        qsig = bandpass(qsig, 'qam')
-        mag = (isig**2 + qsig**2)**.5
-        phase = np.arctan2(-qsig, isig)
+            #for i in xrange(len(buf)):
+            #    alpha = ovl[ln][i][1] / 255.
+            #    lum = ovl[ln][i][0] / 255.
+            #    buf[i] = (1.-alpha)*buf[i] + alpha*lum
 
+            chroma_bw = 1.1e6
+            chroma = bandpass(buf, 'chroma')
+            luma = bandpass(buf, 'luma')
+        
+            isig = 2 * Iref[:len(chroma)] * chroma
+            qsig = 2 * Qref[:len(chroma)] * chroma
+            isig = bandpass(isig, 'qam')
+            qsig = bandpass(qsig, 'qam')
+            mag = (isig**2 + qsig**2)**.5
+            phase = np.arctan2(-qsig, isig)
+        else:
+            ref_phase = 0
+            buf = cbar_rows[bisect.bisect_right(cbar_row_heights, bmln)]
+            luma, phase, mag = buf
+
+            ovl = mkoverlay(fnum)
+            alpha = ovl[bmln][1] / 255.
+            ovlum = ovl[bmln][0] / 255.
+            luma = (1.-alpha)*luma + alpha*ovlum
+            mag = (1.-alpha)*mag
+
+            
         #plt.plot(mag)
         #plt.plot(phase)
         #plt.show()

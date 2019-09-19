@@ -5,6 +5,12 @@ from PIL import ImageDraw
 import glob
 import re
 
+"""
+Overlay the decoded video frames from ntschack.py with annotated text from the closed captioning stream
+
+This script performs no decoding; it just composits the outputs of ntschack.py
+"""
+
 TXTSZ = 28
 txtfont = ImageFont.truetype("/usr/share/fonts/truetype/ubuntu/UbuntuMono-R.ttf", TXTSZ)
 hexfont = ImageFont.truetype("/home/drew/Downloads/UnicodeBMPFallback.ttf", TXTSZ)
@@ -13,7 +19,7 @@ hexheight = hexfont.getsize('A')[1]
 hexfont = ImageFont.truetype("/home/drew/Downloads/UnicodeBMPFallback.ttf", int(float(TXTSZ) * txth/hexheight))
 
 X0 = 10
-Y0 = 25
+Y0 = 22
 LINESEP = 1.05
 BOTTOM_MARGIN = int(.75*txth)    
 
